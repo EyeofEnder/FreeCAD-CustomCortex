@@ -162,7 +162,7 @@ class intersection_point():
         
 class curve_net():
 
-    def __init__(self,selection=None,curves=[],nodes=[],sketches={"node_frame":None,"node_conductor":None,"frame":None,"frame_conductors":None},objects={"cutout":None},node_params=None,default_node_params=(-0.5,2,(10,-5,0),(10,-185,0)),center=App.Vector(0,0,0),object_offsets={"cutout":(0,0,-0.5)},pipe_ignore={}):
+    def __init__(self,selection=None,curves=[],nodes=[],sketches={"node_frame":None,"node_conductor":None,"frame":None,"frame_conductors":None},objects={"cutout":None},node_params=None,default_node_params=(-0.5,2,(10,-5,0),(10,-185,0)),center=App.Vector(0,0,0),object_offsets={"cutout":(0,0,-0.5)},piped_curves={}):
             
         self.sketches = sketches
         self.groups = {}
@@ -171,7 +171,7 @@ class curve_net():
         self.node_params = node_params if node_params else default_node_params
         self.object_offsets = object_offsets
         self.selection = []
-        self.pipe_ignore = pipe_ignore
+        self.piped_curves = piped_curves
         #self.points = points
         
         if selection:
@@ -279,9 +279,11 @@ class curve_net():
         
         if self.sketches["node_frame"] and self.sketches["node_conductor"]:
                 
-            node_group = find_or_create(doc,"generated_nodes$","App::DocumentObjectGroup")
+            node_frame_group = find_or_create(doc,"generated_nodes_frames$","App::DocumentObjectGroup")
+            
+            node_conductor_group = find_or_create(doc,"generated_nodes_conductors$","App::DocumentObjectGroup")
                 
-            self.groups["nodes"] = node_group
+            self.groups["nodes"] = [node_frame_group, node_conductor_group]
             
             for k in range(0, len(self.nodes)):
                 
@@ -321,19 +323,23 @@ class curve_net():
                 
                 text_obj.Visibility = False
                 
-                n = generate_layered_node(frame_xsection=self.sketches["node_frame"],conductor_xsections=[self.sketches["node_conductor"] for l in params],conductor_angles=angles,conductor_angle_offsets=angle_offsets,conductor_z_offsets=z_offsets,placement=self.nodes[k].intersection_point_obj, body_label="layered_node",z_offset=self.nodes[k].generation_parameters[0])
+                n_frame,n_cond = generate_layered_node(frame_xsection=self.sketches["node_frame"],conductor_xsections=[self.sketches["node_conductor"] for l in params],conductor_angles=angles,conductor_angle_offsets=angle_offsets,conductor_z_offsets=z_offsets,placement=self.nodes[k].intersection_point_obj, body_label="layered_node",z_offset=self.nodes[k].generation_parameters[0])
                 
-                node_group.addObjects(n)
+                node_conductor_group.addObject(n_cond)
                 
-            generated.addObject(node_group)
+                node_frame_group.addObject(n_frame)
+                
+            generated.addObject(node_conductor_group)
+            
+            generated.addObject(node_frame_group)
             
         print("Aux net:", self.aux_curves)
             
         if self.sketches["frame"]:
         
-            ignore = self.pipe_ignore["frame"] if "frame" in self.pipe_ignore.keys() else []
+            piped = self.piped_curves["frame"] if "frame" in self.piped_curves.keys() else []
             
-            frame = autopipe(curves,pipe_sketch=self.sketches["frame"],subtractive=False,group_label="Frame",body_label="pipe_frame",aux_net=self.aux_curves,ignore=ignore)[0]
+            frame = autopipe(curves,pipe_sketch=self.sketches["frame"],subtractive=False,group_label="Frame",body_label="pipe_frame",aux_net=self.aux_curves,piped=piped)[0]
             
             self.groups["frame"] = frame
             
@@ -345,9 +351,9 @@ class curve_net():
             
             for c in self.sketches["frame_conductors"]:
             
-                ignore = self.pipe_ignore[c.Label] if c.Label in self.pipe_ignore.keys() else []
+                piped = self.piped_curves[c.Label] if c.Label in self.piped_curves.keys() else []
                 
-                cond = autopipe(curves,pipe_sketch=c,subtractive=False,group_label="Conductors",body_label="pipe_conductor",aux_net=self.aux_curves)[0]
+                cond = autopipe(curves,pipe_sketch=c,subtractive=False,group_label="Conductors",body_label="pipe_conductor",aux_net=self.aux_curves,piped=piped)[0]
                 
                 self.groups["frame_conductors"].append(cond)
                 
@@ -358,8 +364,6 @@ class curve_net():
             self.groups["objects" ] = []
             
             for k in self.objects.keys():
-            
-                ignore = self.pipe_ignore["frame"] if "frame" in self.pipe_ignore.keys() else []
                 
                 #points = [n.intersection_point_obj for n in self.nodes]
                 
@@ -812,7 +816,7 @@ def generate_normals(sel,tolerance=1,group_label="point_net_normals"):
     return normals
     
     
-def autopipe(net,pipe_sketch,subtractive=False,group_label="point_net_pipes",body_label="pipe_frame",aux_net=[],ignore=[]):
+def autopipe(net,pipe_sketch,subtractive=False,group_label="point_net_pipes",body_label="pipe_frame",aux_net=[],piped=[]):
 
     doc = App.activeDocument()
     
@@ -858,7 +862,9 @@ def autopipe(net,pipe_sketch,subtractive=False,group_label="point_net_pipes",bod
     
     for c in wires.keys():
     
-        if c not in ignore:
+        #print(c,piped)
+    
+        if c in piped:
         
             pipe_body = doc.addObject("PartDesign::Body",body_label)
             
@@ -1368,6 +1374,10 @@ def interpolate_aux_curves(curves,normal_points=[],mode="points",center=None,deg
     
 # Format: (z offset, z distance (check if unused), (angle, angle offset, z offset), (angle1, angle offset1, z offset1) ...)
     
+
+offsets = (4.6,1,-2.6)
+    
+    
 default_node_connections = {
 "1-2-55":(-1,0,(210,-180,4.2),(40,-200,1),(360,-200,-2.2)),
 "16-44-55":(-1,0,(210,-180,4.2),(40,-200,1),(360,-200,-2.2)),
@@ -1406,33 +1416,33 @@ default_node_connections = {
 
 
 test_node_connections = {
-"1-2-55":(-1,0,(360,-200,1)),
-"16-44-55":(-1,0,(360,-200,1)),
-"22-55":(-1,0,(360,-180,1)),
+"1-2-55":(-1,0,(360,-200,offsets[1])),
+"16-44-55":(-1,0,(360,-200,offsets[1])),
+"22-55":(-1,0,(360,-180,offsets[1])),
 "1-5":(-1,0),
 "2-3-21":(-1,0),
-"3-4-23-24":(-1,0,(36,-200,1)),
+"3-4-23-24":(-1,0,(36,-200,offsets[1])),
 "4-51":(-1,0),
 "5-6-43-44":(-1,0),
-"6-7-10-11":(-1,0,(360,-200,1),(360,-200,4.2)),
-"7-8-25-26":(-1,0,(360,-180,4.2),(360,-200,1)),
-"8-33-54":(-1,0,(90,-113,4.2),(90,113,4.2)), # split same level
-"9-10-15-16":(-1,0,(360,-180,4.2),(360,-200,1)),
+"6-7-10-11":(-1,0,(360,-200,offsets[1]),(360,-200,offsets[0])),
+"7-8-25-26":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[1])),
+"8-33-54":(-1,0,(90,-113,offsets[0]),(90,113,offsets[0])), # split same level
+"9-10-15-16":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[1])),
 "9-17-21":(-1,0),
-"11-12-40-41":(-1,0,(360,-180,4.2)),
-"12-37":(-1,0,(360,-180,1)),
-"13-29-32":(-1,0,(360,-180,4.2),(360,-200,1),(360,-200,-2.2)),
-"13-14-53-54":(-1,0,(360,-180,4.2),(360,-200,1)),
-"14-15-26-27":(-1,0,(100,-185,4.2),(100,-5,4.2)), # split same level
-"17-18-27-28":(-1,0,(360,-180,4.2),(360,-200,-2.2)),
-"18-19-52-53":(-1,0,(360,-200,1),(360,-200,4.2)),
-"19-20-29-30":(-1,0,(360,-180,4.2)),
-"20-34":(-1,0,(360,-180,1)),
-"22-24":(-1,0,(360,-180,4.2)),
-"23-28-50":(-1,0,(360,-200,1)),
-"25-39-41":(-1,0,(360,-180,4.2),(360,-200,1),(360,-200,-2.2)),
+"11-12-40-41":(-1,0,(360,-180,offsets[0])),
+"12-37":(-1,0,(360,-180,offsets[1])),
+"13-29-32":(-1,0,(360,-180,offsets[0]),(360,-200,1),(360,-200,-2.2)),
+"13-14-53-54":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[1])),
+"14-15-26-27":(-1,0,(100,-185,offsets[0]),(100,-5,offsets[0])), # split same level
+"17-18-27-28":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[2])),
+"18-19-52-53":(-1,0,(360,-200,offsets[1]),(360,-200,offsets[0])),
+"19-20-29-30":(-1,0,(360,-180,offsets[0])),
+"20-34":(-1,0,(360,-180,offsets[1])),
+"22-24":(-1,0,(360,-180,offsets[1])),
+"23-28-50":(-1,0,(360,-200,offsets[1])),
+"25-39-41":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[1]),(360,-200,offsets[2])),
 "30-49":(-1,0),
-"31-32-34-35":(-1,0,(360,-180,4.2),(360,-200,1),(360,-200,-2.2)),
+"31-32-34-35":(-1,0,(360,-180,offsets[0]),(360,-200,offsets[1]),(360,-200,offsets[2])),
 "31-46":(-1,0),
 "33-35-36":(-1,0),
 "36-37-38-39":(-1,0),
@@ -1441,11 +1451,11 @@ test_node_connections = {
 "49-50-51-52":(-1,0)
 }
 
-pipe_ignore = {
-"frame":[],
-"frame_3_conductor_1":["8"],
-"frame_3_conductor_2":["8"],
-"frame_3_conductor_3":["8"]
+pipe_connections = {
+"frame":list(range(1,56)),
+"frame_3_conductor_3":[32,39],
+"frame_3_conductor_2":[7,10,13,16,18,23,24,25,28,34,37,53,55],
+"frame_3_conductor_1":[8,11,14,15,19,26,27,29,32,39,41,54]
 }
 
 def full_auto(curves=None,node_parameters=default_node_connections):
@@ -1481,6 +1491,6 @@ def full_auto(curves=None,node_parameters=default_node_connections):
             center=found["center"][0].Placement.Base,
             object_offsets={"cutout":(0,0,-1)},
             node_params=test_node_connections,
-            pipe_ignore=pipe_ignore)
+            piped_curves=pipe_connections)
     
     net.generate()
